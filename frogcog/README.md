@@ -18,7 +18,8 @@ These are the steps as they looked in the Claude desktop app in November 2026. T
    Connecting adds a second entry to your list in Claude, under Connectors: "FrogCog-lookups", a custom connector
    at mcp.frogcog.com, beside the FrogCog plugin itself. It is this plugin's link to FrogCog's own service and
    nothing else. Removing it leaves the binder working, with no makers' figures.
-4. Type `/frogcog:set-up`.
+4. Ask for what you want, for example "add my new fridge". The first time, FrogCog asks where to keep the
+   records and which country you are in, and shows you who sees what. (`/frogcog:set-up` does the same on its own.)
 
 ## What you can do
 
