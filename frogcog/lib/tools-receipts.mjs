@@ -9,6 +9,7 @@ import path from 'node:path';
 import { obj, text, pick, DAY } from './schema.mjs';
 import { change, read, told, APP_NAME } from './folder.mjs';
 import { app, today, dayOr, one, money, plural } from './common.mjs';
+import { filePath } from './tools-files.mjs';
 
 const TYPES = app.RECEIPT_TYPES.map(t => t[0]);
 const FIELDS = {
@@ -102,7 +103,7 @@ export const receiptTools = [
       const pack = app.packData(a.kind, o);
       if (!pack) throw told('That pack could not be made. Nothing was written.');
       const images = {};
-      for (const k of pack.docKeys || []) { const f = b.binder.files[k], ext = f && path.extname(f.path).toLowerCase().slice(1), p = f && path.join(dir, f.path);
+      for (const k of pack.docKeys || []) { const f = b.binder.files[k], ext = f && path.extname(f.path).toLowerCase().slice(1), p = f && filePath(b, dir, k);
         if (f && ['jpg', 'jpeg', 'png', 'webp', 'gif'].includes(ext) && fs.existsSync(p)) images[k] = 'data:image/' + (ext === 'jpg' ? 'jpeg' : ext) + ';base64,' + fs.readFileSync(p).toString('base64'); }
       fs.mkdirSync(path.join(dir, 'exports'), { recursive: true });
       // Named after the pack's own title: "frogcog-insurance-contents-list-2026-11-20". (The app's own name puts the

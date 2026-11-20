@@ -13,6 +13,13 @@ function exportFilename(kind, isoDate){
 }
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2,7);
 const esc = s => (s==null?'':String(s)).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const safeHttpsUrl = u => /^https:\/\//i.test(u||'') ? u : '';
+const isImageDataUrl = v => typeof v==='string' && /^data:image\/(png|jpe?g|webp|gif);base64,[A-Za-z0-9+/=]+$/i.test(v);
+const safeCurrency = c => (typeof c==='string' && /^[\p{L}\p{Sc}.]{1,6}$/u.test(c)) ? c : '';
+function safeFileName(name, fallback){
+  const s = String(name==null ? '' : name).replace(/[\u0000-\u001f\u007f]/g, '').replace(/[\\/:*?"<>|]/g, '_').replace(/^[\s.]+/, '').replace(/[\s.]+$/, '').slice(0, 120);
+  return s || fallback || 'File';
+}
 const telHref = phone => {
   let s = String(phone==null?'':phone).trim();
   const plus = s.startsWith('+') ? '+' : '';
@@ -219,7 +226,7 @@ function coveredValue(items, region){
   (items||[]).forEach(w => {
     const st = displayStatus(w);
     if((st.key==='active' || st.key==='soon') && w.price!=null){
-      const c = w.currency || defaultCurrency(region);
+      const c = safeCurrency(w.currency) || defaultCurrency(region);
       by[c] = (by[c]||0) + w.price;
       if(st.via==='plan') plan = true;
     }
@@ -364,12 +371,13 @@ function activeRecallMatches(state, items){
   const dis = new Set((state && state.dismissed) || []), ids = new Set((items || []).map(w => w.id));
   return ((state && state.matches) || []).filter(m => !dis.has(m.key) && ids.has(m.id));
 }
-function icsEsc(s){ return String(s||'').replace(/\\/g,'\\\\').replace(/[,;]/g,m=>'\\'+m).replace(/\r?\n/g,'\\n'); }
+function icsEsc(s){ return String(s||'').replace(/\\/g,'\\\\').replace(/[,;]/g,m=>'\\'+m).replace(/\r\n|\r|\n/g,'\\n').replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g,''); }
 function icsStamp(){ const p=n=>String(n).padStart(2,'0'); const d=new Date(); return d.getUTCFullYear()+p(d.getUTCMonth()+1)+p(d.getUTCDate())+'T'+p(d.getUTCHours())+p(d.getUTCMinutes())+p(d.getUTCSeconds())+'Z'; }
 function icsEvent(ev){
-  const dt=(ev.date||'').replace(/-/g,''); if(!dt) return '';
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(String(ev.date||''))) return '';
+  const dt=ev.date.replace(/-/g,'');
   const end=iso(addDays(parse(ev.date),1)).replace(/-/g,'');
-  const L=['BEGIN:VEVENT','UID:'+ev.uid,'DTSTAMP:'+icsStamp(),'DTSTART;VALUE=DATE:'+dt,'DTEND;VALUE=DATE:'+end,'SUMMARY:'+icsEsc(ev.summary)];
+  const L=['BEGIN:VEVENT','UID:'+String(ev.uid||'').replace(/[^\w.@-]/g,''),'DTSTAMP:'+icsStamp(),'DTSTART;VALUE=DATE:'+dt,'DTEND;VALUE=DATE:'+end,'SUMMARY:'+icsEsc(ev.summary)];
   if(ev.desc) L.push('DESCRIPTION:'+icsEsc(ev.desc));
   if(ev.rrule) L.push('RRULE:'+ev.rrule);
   const p=n=>String(n).padStart(2,'0');
@@ -512,10 +520,10 @@ function validateImport(d){
   if(d.warranties!==undefined && !Array.isArray(d.warranties)) return {ok:false, error:'This file is not a '+APP_NAME+' backup (products list is the wrong shape).'};
   if(d.maintenance!==undefined && !Array.isArray(d.maintenance)) return {ok:false, error:'This file is not a '+APP_NAME+' backup (reminders list is the wrong shape).'};
   if(d.contacts!==undefined && !Array.isArray(d.contacts)) return {ok:false, error:'This file is not a '+APP_NAME+' backup (contacts list is the wrong shape).'};
-  const warranties = (d.warranties||[]).filter(w=>w && typeof w==='object' && !Array.isArray(w));
-  const maintenance = (d.maintenance||[]).filter(m=>m && typeof m==='object' && !Array.isArray(m));
-  const contacts = (d.contacts||[]).filter(c=>c && typeof c==='object' && !Array.isArray(c));
-  const profile = (d.profile && typeof d.profile==='object' && !Array.isArray(d.profile)) ? d.profile : null;
+  const warranties = (d.warranties||[]).filter(w=>w && typeof w==='object' && !Array.isArray(w)).slice(0, IMPORT_MAX_RECORDS);
+  const maintenance = (d.maintenance||[]).filter(m=>m && typeof m==='object' && !Array.isArray(m)).slice(0, IMPORT_MAX_RECORDS);
+  const contacts = (d.contacts||[]).filter(c=>c && typeof c==='object' && !Array.isArray(c)).slice(0, IMPORT_MAX_RECORDS);
+  const profile = (d.profile && typeof d.profile==='object' && !Array.isArray(d.profile)) ? cleanImportedValue(d.profile, 0) : null;
   const photos = (d.photos && typeof d.photos==='object' && !Array.isArray(d.photos)) ? d.photos : {};
   const manuals = (d.manuals && typeof d.manuals==='object' && !Array.isArray(d.manuals)) ? d.manuals : {};
   const nManuals = warranties.filter(w=>w.manual && typeof w.manual==='object' && typeof w.manual.k==='string'
@@ -550,18 +558,53 @@ function backupManualPlan(items, limit){
   all.slice().sort((a,b)=>a.size-b.size).forEach(m=>{ if(bytes+m.size<=max){ include.push(m); bytes += m.size; } else leftOut.push(m); });
   return {include, leftOut, bytes, limit:max};
 }
+const IMPORT_DAY_FIELDS = ['purchased', 'expiry', 'installed', 'returnBy', 'lastDone', 'nextDue'];
+const IMPORT_NUM_FIELDS = ['price', 'replaceEst', 'createdAt'];
+const IMPORT_COUNT_FIELDS = {interval:1200, qty:9999};
+const IMPORT_MAX_TEXT = 100000, IMPORT_MAX_LIST = 1000, IMPORT_MAX_FIELDS = 200, IMPORT_MAX_DEPTH = 6, IMPORT_MAX_RECORDS = 5000;
+function cleanImportedValue(v, depth){
+  if(typeof v==='string') return v.length>IMPORT_MAX_TEXT ? v.slice(0, IMPORT_MAX_TEXT) : v;
+  if(typeof v==='number') return isFinite(v) ? v : undefined;
+  if(typeof v==='boolean' || v===null) return v;
+  if(!v || typeof v!=='object' || depth>=IMPORT_MAX_DEPTH) return undefined;
+  if(Array.isArray(v)) return v.slice(0, IMPORT_MAX_LIST).map(x=>cleanImportedValue(x, depth+1)).filter(x=>x!==undefined);
+  const out = {};
+  Object.keys(v).slice(0, IMPORT_MAX_FIELDS).forEach(k=>{
+    if(!/^[A-Za-z0-9_-]{1,60}$/.test(k) || k==='__proto__' || k==='constructor' || k==='prototype') return;
+    const c = cleanImportedValue(v[k], depth+1);
+    if(k==='currency' && !safeCurrency(c)) return;
+    if(c!==undefined) out[k] = c;
+  });
+  return out;
+}
+function cleanImportedRecord(rec){
+  const r = cleanImportedValue(rec, 0);
+  if(!r || typeof r!=='object' || Array.isArray(r)) return {};
+  IMPORT_DAY_FIELDS.forEach(k=>{ if(k in r && r[k]!=='' && !(typeof r[k]==='string' && /^\d{4}-\d{2}-\d{2}$/.test(r[k]))) delete r[k]; });
+  IMPORT_NUM_FIELDS.forEach(k=>{
+    if(!(k in r) || r[k]===null) return;
+    if(typeof r[k]==='string' && /^\d{1,12}(\.\d{1,6})?$/.test(r[k].trim())) r[k] = Number(r[k].trim());
+    if(typeof r[k]!=='number' || r[k]<0) delete r[k];
+  });
+  Object.keys(IMPORT_COUNT_FIELDS).forEach(k=>{
+    if(!(k in r)) return;
+    const n = typeof r[k]==='string' && /^\d{1,6}$/.test(r[k].trim()) ? Number(r[k].trim()) : r[k];
+    if(typeof n==='number' && n>=1 && n<=IMPORT_COUNT_FIELDS[k] && Math.floor(n)===n) r[k] = n; else delete r[k];
+  });
+  if('regLink' in r && !(typeof r.regLink==='string' && safeHttpsUrl(r.regLink) && !/[\s"'<>]/.test(r.regLink))) delete r.regLink;
+  return r;
+}
 function sanitizeImportedRecords(warranties, maintenance, photos, contacts, manuals){
   photos = photos || {};
   manuals = (manuals && typeof manuals==='object') ? manuals : {};
   const newPhotos = {}, newManuals = {}, manualsMissing = [];
-  const isImageDataUrl = v => typeof v==='string' && /^data:image\/(png|jpe?g|webp|gif);base64,/i.test(v);
   const remap = (rec, isItem) => {
-    const r = Object.assign({}, rec);
+    const r = cleanImportedRecord(rec);
     const oldId = r.id;
     r.id = uid();
     const man = r.manual; delete r.manual;
     if(isItem && man && typeof man==='object' && typeof man.k==='string'){
-      const name = (typeof man.name==='string' && man.name.trim()) ? man.name.slice(0,120) : 'Manual.pdf';
+      const name = safeFileName(man.name, 'Manual.pdf');
       const bytes = Object.prototype.hasOwnProperty.call(manuals, man.k) ? base64ToBytes(manuals[man.k]) : null;
       if(bytes && bytes.length<=MANUAL_MAX_BYTES && isPdfBytes(bytes)){
         const k = uid();
@@ -599,7 +642,7 @@ function receiptRecord(f, existing, nowMs){
   const n = parseFloat(g('amount').replace(/[^0-9.]/g,''));
   const amount = isNaN(n) ? null : Math.round(n*100)/100;
   const old = existing || {};
-  return {record:{ id:old.id||uid(), type, title, date, amount, currency:g('currency')||old.currency||'', store:g('store').slice(0,120),
+  return {record:{ id:old.id||uid(), type, title, date, amount, currency:safeCurrency(g('currency'))||safeCurrency(old.currency), store:g('store').slice(0,120),
     who:g('who').slice(0,120), label:cleanCostLabel(g('label')), itemId:g('itemId')||null, maintId:g('maintId')||null, text:g('text').slice(0,20000),
     notes:g('notes').slice(0,2000), docs:Array.isArray(old.docs)?old.docs:[], createdAt:old.createdAt||nowMs||Date.now() }};
 }
@@ -666,7 +709,7 @@ function repairCostsFor(receipts, itemId){
   return by;
 }
 function sanitizeImportedReceipts(list, photos, idMap){
-  const isImg = v => typeof v==='string' && /^data:image\/(png|jpe?g|webp|gif);base64,/i.test(v);
+  const isImg = v => typeof v==='string' && isImageDataUrl(v);
   const map = idMap||{}, newPhotos = {};
   const receipts = (Array.isArray(list)?list:[]).filter(r=>r && typeof r==='object' && typeof r.title==='string').map(r=>{
     const res = receiptRecord(Object.assign({}, r, {amount:r.amount==null?'':String(r.amount)}), null);
@@ -694,7 +737,7 @@ function csvCell(v){
 }
 function toCsv(columns, rows){ return [columns].concat(rows||[]).map(r=>r.map(csvCell).join(',')).join('\r\n')+'\r\n'; }
 const _yes = b => b ? 'Yes' : 'No';
-const _money = (v, c) => v==null || v==='' ? '' : (c||'')+Number(v).toFixed(2);
+const _money = (v, c) => v==null || v==='' ? '' : safeCurrency(c)+Number(v).toFixed(2);
 const _ageYears = (purchased, todayIso) => { if(!purchased || !todayIso) return ''; const d=(parse(todayIso)-parse(purchased))/31557600000; return d>=0 ? String(Math.floor(d)) : ''; };
 const _hasReceipt = w => !!(w.receiptText || (w.docs||[]).some(d=>/receipt/i.test(d.label||'')));
 function packData(kind, o){
@@ -814,7 +857,7 @@ function regStatusOf(w, isReady){
   return {key:'need', label:'Add details to register →', cls:'creg need'};
 }
 function sanitizeImportedRoomPhotos(map, photos){
-  const isImg = v => typeof v==='string' && /^data:image\/(png|jpe?g|webp|gif);base64,/i.test(v);
+  const isImg = v => typeof v==='string' && isImageDataUrl(v);
   const rooms = {}, newPhotos = {};
   if(!map || typeof map!=='object' || Array.isArray(map)) return {rooms, photos:newPhotos};
   Object.keys(map).forEach(room=>{
@@ -830,7 +873,7 @@ function contentsTotals(items){
     if(w.replaceEst!=null) out.estimate[c]=Math.round(((out.estimate[c]||0)+w.replaceEst*q)*100)/100; });
   return out;
 }
-function moneyByCurrency(by){ return Object.keys(by||{}).filter(c=>by[c]).map(c=>c+Number(by[c]).toLocaleString('en-US',{minimumFractionDigits:by[c]%1?2:0, maximumFractionDigits:2})).join(' + '); }
+function moneyByCurrency(by){ return Object.keys(by||{}).filter(c=>by[c]).map(c=>safeCurrency(c)+Number(by[c]).toLocaleString('en-US',{minimumFractionDigits:by[c]%1?2:0, maximumFractionDigits:2})).join(' + '); }
 function dueItems(opts){
   const o = opts || {};
   const todayIso = o.todayIso || iso(today0());
@@ -905,6 +948,10 @@ export {
   exportFilename,
   uid,
   esc,
+  safeHttpsUrl,
+  isImageDataUrl,
+  safeCurrency,
+  safeFileName,
   telHref,
   upkeepReminder,
   US_STATES,
@@ -997,6 +1044,16 @@ export {
   bytesToBase64,
   base64ToBytes,
   backupManualPlan,
+  IMPORT_DAY_FIELDS,
+  IMPORT_NUM_FIELDS,
+  IMPORT_COUNT_FIELDS,
+  IMPORT_MAX_TEXT,
+  IMPORT_MAX_LIST,
+  IMPORT_MAX_FIELDS,
+  IMPORT_MAX_DEPTH,
+  IMPORT_MAX_RECORDS,
+  cleanImportedValue,
+  cleanImportedRecord,
   sanitizeImportedRecords,
   RECEIPT_TYPES,
   receiptTypeLabel,

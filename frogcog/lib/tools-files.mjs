@@ -7,11 +7,22 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { obj, text, pick } from './schema.mjs';
-import { change, read, told } from './folder.mjs';
+import { change, read, told, inside } from './folder.mjs';
 import { app, today, one, clip, plural } from './common.mjs';
 
 const PICTURE = ['.jpg', '.jpeg', '.png', '.webp', '.gif'], MAX_FILE = 50 * 1024 * 1024;
-const safeName = n => String(n).replace(/[^\w.\- ]+/g, '_').slice(0, 80);
+/* A file's name as kept in the binder: a plain name, never a path. A name can come from a backup, which is someone
+   else's file, so it is made plain every time it is used, not only when it is first stored. */
+const safeName = n => app.safeFileName(String(n == null ? '' : n).replace(/[^\w.\- ]+/g, '_').slice(0, 80), 'file');
+/* Is this really a picture? The first bytes say so, whatever the file is called. */
+function isPictureBytes(p){
+  const fd = fs.openSync(p, 'r'), h = Buffer.alloc(12);
+  try { fs.readSync(fd, h, 0, 12, 0); } finally { fs.closeSync(fd); }
+  return (h[0] === 0xFF && h[1] === 0xD8 && h[2] === 0xFF)                                   // jpg
+    || h.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]))  // png
+    || h.subarray(0, 4).toString('latin1') === 'GIF8'                                        // gif
+    || (h.subarray(0, 4).toString('latin1') === 'RIFF' && h.subarray(8, 12).toString('latin1') === 'WEBP');
+}
 
 export function inboxFiles(dir){
   const inbox = path.join(dir, 'inbox');
@@ -28,7 +39,7 @@ function source(dir, file){
 export function fileIn(b, dir, file, mustBe){
   const { p, fromInbox } = source(dir, file), ext = path.extname(p).toLowerCase(), size = fs.statSync(p).size;
   if (size > MAX_FILE) throw told('That file is larger than 50 MB. Nothing was changed.');
-  const isPdf = ext === '.pdf' && app.isPdfBytes(fs.readFileSync(p).subarray(0, 8)), isPic = PICTURE.includes(ext);
+  const isPdf = ext === '.pdf' && app.isPdfBytes(fs.readFileSync(p).subarray(0, 8)), isPic = PICTURE.includes(ext) && isPictureBytes(p);
   if (mustBe === 'pdf' && !isPdf) throw told('A manual is kept as a PDF, and that file is not one. Nothing was changed.');
   if (mustBe === 'picture' && !isPic) throw told('That has to be a picture (jpg, png, webp or gif). Nothing was changed.');
   if (!isPdf && !isPic) throw told('The binder keeps pictures (jpg, png, webp, gif) and PDFs, and that file is neither. Nothing was changed.');
@@ -40,14 +51,22 @@ export function fileIn(b, dir, file, mustBe){
 /* Take a kept file off its record and put it back in the inbox. */
 export function fileOut(b, dir, k){
   const f = b.binder.files[k];
-  if (f && fs.existsSync(path.join(dir, f.path))) {
-    let dest = path.join(dir, 'inbox', f.name), i = 2;
-    while (fs.existsSync(dest)) dest = path.join(dir, 'inbox', path.parse(f.name).name + ' (' + i++ + ')' + path.extname(f.name));
-    fs.renameSync(path.join(dir, f.path), dest);
+  // Both ends are held inside the binder folder (inside() refuses anything else): the kept file under files/, and the
+  // inbox, under a plain name. Found 2026-11-20: a backup's manual name with "../" in it put a file outside the folder.
+  const from = f ? keptPath(dir, f) : null;
+  if (from && fs.existsSync(from)) {
+    const name = safeName(f.name), inbox = path.join(dir, 'inbox');
+    let dest = inside(inbox, name), i = 2;
+    while (fs.existsSync(dest)) dest = inside(inbox, path.parse(name).name + ' (' + i++ + ')' + path.extname(name));
+    fs.renameSync(from, dest);
   }
   delete b.binder.files[k];
 }
-export const filePath = (b, dir, k) => { const f = b.binder.files[k]; return f ? path.join(dir, f.path) : null; };
+/* Where a kept file is: always under the binder's files/ folder, or nowhere. */
+function keptPath(dir, f){
+  try { return inside(path.join(dir, 'files'), path.basename(String(f.path || ''))); } catch (e) { return null; }
+}
+export const filePath = (b, dir, k) => { const f = b.binder.files[k]; return f ? keptPath(dir, f) : null; };
 
 export const fileTools = [
   {

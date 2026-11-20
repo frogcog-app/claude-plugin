@@ -10,8 +10,11 @@ import { app, today, plural } from './common.mjs';
 import { fetchRecalls } from './recall-fetch.mjs';
 
 const WHAT_IS_SENT = region => 'The check sends each brand name in the binder, and nothing else, from this computer to ' + app.recallSource(region).sends + '. No model, serial number, date or name is sent.' + (region === 'US' ? ' It also downloads FrogCog\'s published copy of the CPSC\'s safety warnings, one file that is the same for everyone.' : '');
-const view = m => ({ key: m.key, item: m.name, title: m.title, date: m.date || null, hazard: m.hazard || null, link: m.url || null, kind: m.kind === 'warning' ? 'safety warning' : 'possible recall', what_to_do: m.action || null });
-const lineOf = m => '- ' + (m.kind === 'warning' ? 'Safety warning' : 'Possible recall') + ' for ' + m.name + ': ' + m.title + (m.date ? ' (' + m.date + ')' : '') + (m.hazard ? '. Hazard: ' + m.hazard : '') + (m.url ? '. Notice: ' + m.url : '') + ' (key ' + m.key + ')';
+/* A notice comes from a public list, not from this program: its words are cut to length and its link is shown only when it is https. */
+const cut = (s, n) => { const t = String(s == null ? '' : s).replace(/\s+/g, ' ').trim(); return t.length > n ? t.slice(0, n - 1) + '…' : t; };
+const link = m => app.safeHttpsUrl(String(m.url || '')) && !/[\s"<>]/.test(String(m.url)) ? String(m.url).slice(0, 300) : '';
+const view = m => ({ key: m.key, item: m.name, title: cut(m.title, 200), date: cut(m.date, 20) || null, hazard: cut(m.hazard, 200) || null, link: link(m) || null, kind: m.kind === 'warning' ? 'safety warning' : 'possible recall', what_to_do: cut(m.action, 300) || null });
+const lineOf = m => '- ' + (m.kind === 'warning' ? 'Safety warning' : 'Possible recall') + ' for ' + m.name + ': ' + cut(m.title, 200) + (m.date ? ' (' + cut(m.date, 20) + ')' : '') + (m.hazard ? '. Hazard: ' + cut(m.hazard, 200) : '') + (link(m) ? '. Notice: ' + link(m) : '') + ' (key ' + m.key + ')';
 
 export const recallTools = [
   {

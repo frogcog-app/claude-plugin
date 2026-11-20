@@ -9,7 +9,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { obj, text } from './schema.mjs';
-import { change, read, told, APP_NAME } from './folder.mjs';
+import { change, read, told, inside, APP_NAME } from './folder.mjs';
+import { filePath } from './tools-files.mjs';
 import { app, today, plural, sameMaker, upkeepPreset } from './common.mjs';
 import { makerTerm, upkeepJob } from './proof.mjs';
 
@@ -61,7 +62,7 @@ export function collectBackup(b, dir){
   const leftOut = []; let attempted = 0, written = 0;
   for (const { k, of } of docKeys(b)) {
     attempted++;
-    const f = b.binder.files[k], p = f && path.join(dir, f.path), type = f && IMAGE[path.extname(f.path).toLowerCase()];
+    const f = b.binder.files[k], p = f && filePath(b, dir, k), type = f && IMAGE[path.extname(f.path).toLowerCase()];
     if (!f || !fs.existsSync(p)) { leftOut.push((f ? f.name : 'a file') + ' (' + of + '): the file is missing from the folder'); continue; }
     if (!type) { leftOut.push(f.name + ' (' + of + '): the app\'s backup carries pictures, not ' + (path.extname(f.path) || 'this kind of') + ' files'); continue; }
     out.photos[k] = 'data:' + type + ';base64,' + fs.readFileSync(p).toString('base64'); written++;
@@ -70,7 +71,7 @@ export function collectBackup(b, dir){
   const plan = app.backupManualPlan(b.warranties), manualsOut = plan.leftOut.map(m => m.name + ' (' + m.item + '): too large to fit');
   let included = 0, bytes = 0;
   for (const m of plan.include) {
-    const f = b.binder.files[m.k], p = f && path.join(dir, f.path);
+    const f = b.binder.files[m.k], p = f && filePath(b, dir, m.k);
     const buf = (f && fs.existsSync(p)) ? fs.readFileSync(p) : null;
     if (!buf || !app.isPdfBytes(buf) || bytes + buf.length > plan.limit) { manualsOut.push(m.name + ' (' + m.item + '): ' + (buf ? 'not a PDF, or too large to fit' : 'the file is missing from the folder')); continue; }
     out.manuals[m.k] = buf.toString('base64'); bytes += buf.length; included++;
@@ -80,9 +81,11 @@ export function collectBackup(b, dir){
 }
 
 function writeFileFor(b, dir, k, bytes, ext, name){
+  // The key is one this program made and the name is a plain file name: neither can point outside files/.
+  if (!/^[A-Za-z0-9]{1,40}$/.test(String(k))) return;
   const rel = 'files/' + k + ext;
-  fs.writeFileSync(path.join(dir, rel), bytes);
-  b.binder.files[k] = { path: rel, name: name || k + ext, size: bytes.length };
+  fs.writeFileSync(inside(dir, rel), bytes);
+  b.binder.files[k] = { path: rel, name: app.safeFileName(name || k + ext, k + ext), size: bytes.length };
 }
 function putPhotos(b, dir, photos){
   let n = 0;
@@ -147,7 +150,7 @@ export const backupTools = [
         for (const room of Object.keys(rp.rooms)) b.roomPhotos[room] = (b.roomPhotos[room] || []).concat(rp.rooms[room]);
         let profile = false;
         if (v.profile && !(b.profile && b.profile.name)) { b.profile = v.profile; profile = true; }
-        if (v.homePlan && !b.homePlan) b.homePlan = v.homePlan;
+        if (v.homePlan && !b.homePlan) b.homePlan = app.cleanImportedValue(v.homePlan, 0) || null;   // plain values only, as for records
         if (d.seasonal) b.seasonal = app.mergeSeasonal(b.seasonal, d.seasonal);
         // Answers from FrogCog lookups that another binder saved come along (the app's own backups have none). A
         // backup is a file anyone can edit, so each answer is taken only from its signature, checked again here,
