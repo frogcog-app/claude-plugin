@@ -254,12 +254,40 @@ function isPdfBytes(buf){
   for(let i=0; i<n; i++){ if(u[i]===0x25 && u[i+1]===0x50 && u[i+2]===0x44 && u[i+3]===0x46 && u[i+4]===0x2D) return true; }
   return false;
 }
+const BRANDS=['Worcester Bosch','Bosch','Beko','AEG','Samsung','LG','Whirlpool','Siemens','Hotpoint','Miele','Electrolux','Panasonic','Sony','Philips','Indesit','Zanussi','Hoover','Candy','Dyson','Sharp','Toshiba','Hisense','NEFF','Smeg','Maytag','KitchenAid','Frigidaire','Amana',
+  'Kenmore','GE','Thermador','Viking','Sub-Zero','Wolf','Cove','Haier','Café','Cafe','Monogram','JennAir','Fisher & Paykel','Midea','Danby','Blomberg','Bertazzoni','Speed Queen','Fisher & Paykel','Danby','Insignia','Vizio','TCL','Honeywell','Carrier','Trane','Lennox','Rheem','Goodman','A.O. Smith','Kidde','First Alert','Dell','HP','Lenovo','DeWalt','Milwaukee','Makita','Ryobi','Craftsman','Shark','Ninja','Keurig','Cuisinart','Breville','Vitamix','iRobot','Bissell','Hamilton Beach','Instant Pot','Honda','Toro','Weber','Traeger',
+  'Belling','Rangemaster','Kenwood','Russell Hobbs','Grundig','Liebherr','Montpellier','CDA','De\'Longhi','Vax','Logik','Vaillant','Baxi',
+  'Lennox','Rheem','A.O. Smith'];
 function brandNamed(text, brand){
   const plain=t=>String(t||'').normalize('NFD').replace(/[̀-ͯ]/g,'');
   const b=plain(brand).trim();
   if(!b) return false;
   const pat=b.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
   return new RegExp('(?:^|[^A-Za-z])'+pat+'(?![A-Za-z])', b.length<=3?'':'i').test(plain(text));
+}
+const MAKER_ALIASES = {
+  'Samsung Electronics':'Samsung', 'Samsung Electronics Co., Ltd.':'Samsung', 'LG Electronics':'LG', 'LG Electronics Inc.':'LG',
+  'Whirlpool Corporation':'Whirlpool', 'GE Appliances':'GE', 'BOSCH':'Bosch', 'SIEMENS':'Siemens', 'Neff':'NEFF',
+  'Miele & Cie. KG':'Miele', 'Dyson Ltd':'Dyson', 'Panasonic Corporation':'Panasonic', 'Sony Corporation':'Sony',
+  'Sharp Corporation':'Sharp', 'Lennox International':'Lennox', 'Carrier Corporation':'Carrier', 'A. O. Smith':'A.O. Smith',
+  'AO Smith':'A.O. Smith', 'Fisher and Paykel':'Fisher & Paykel', 'DeLonghi':'De\'Longhi', 'De Longhi':'De\'Longhi',
+  'Jenn-Air':'JennAir', 'Sub Zero':'Sub-Zero', 'Cafe':'Café' };
+const MAKER_GROUPS = /^\s*(BSH|Electrolux AB|Midea Group|Sub-Zero Group|Haier US|Trane Technologies|Rheem Manufacturing|Vaillant Group)\b/i;
+function makerKey(name, keys){
+  const n = String(name||'').trim();
+  if(!n || !Array.isArray(keys) || !keys.length) return null;
+  const low = n.toLowerCase();
+  const exact = keys.find(k=>String(k).toLowerCase()===low);
+  if(exact) return exact;
+  const sq = t => String(t||'').toLowerCase().replace(/[^a-z0-9]/g,'');
+  const same = sq(n).length >= 2 ? keys.find(k=>sq(k)===sq(n)) : null;
+  if(same) return same;
+  if(MAKER_GROUPS.test(n)) return null;
+  const alias = Object.keys(MAKER_ALIASES).find(a=>a.toLowerCase()===low);
+  if(alias) return keys.find(k=>k===MAKER_ALIASES[alias]) || null;
+  const hits = keys.filter(k=>brandNamed(n, k)).sort((a,b)=>String(b).length-String(a).length);
+  if(!hits.length) return null;
+  return hits.every(h=>h===hits[0] || brandNamed(hits[0], h)) ? hits[0] : null;
 }
 const RECALL_KEYWORDS={
   'Appliances':['appliance','washer','washing','dryer','dishwasher','refrigerator','fridge','freezer','oven','cooker','range','stove','microwave','hob','cooktop','hood'],
@@ -281,7 +309,11 @@ const namesBrand = (text, brand) => {
   const b = String(brand||'').trim().replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
   if(!b) return false;
   const re = new RegExp('(?:^|[^a-z0-9])' + b + '(?![a-z0-9])', 'i'), t = String(text||'');
-  return re.test(t) || re.test(t.replace(/([a-z])([A-Z])/g,'$1 $2'));
+  if(re.test(t) || re.test(t.replace(/([a-z])([A-Z])/g,'$1 $2'))) return true;
+  const letters = String(brand||'').toLowerCase().replace(/[^a-z0-9]/g,'');
+  if(letters.length < 5) return false;
+  const loose = new RegExp('(?:^|[^a-z0-9])' + letters.split('').join("[ .'&-]?") + '(?![a-z0-9])', 'i');
+  return loose.test(t);
 };
 const PRODUCT_TYPE_WORDS = [...new Set(Object.values(RECALL_KEYWORDS).flat().concat([
   'mixer','blender','kettle','toaster','fryer','air fryer','grill','vacuum','purifier','food processor','juicer',
@@ -354,16 +386,21 @@ function recallStateFor(prev, region){
   const p = prev || {};
   return (p.region || 'US') === region ? p : {};
 }
-function recallCheckState(warranties, byBrand, prev, todayIso, region){
+function recallBrand(name, keys){
+  const n = String(name||'').trim();
+  return n ? ((keys && keys.length && makerKey(n, keys)) || n) : '';
+}
+function recallCheckState(warranties, byBrand, prev, todayIso, region, keys){
   prev = prev || {};
-  const brandOf = w => (w.manufacturer||'').toLowerCase().trim();
+  const brandOf = w => recallBrand(w.manufacturer, keys).toLowerCase();
   const failed = new Set(warranties.map(brandOf).filter(b => b && !(b in byBrand)));
   const failedIds = new Set(warranties.filter(w => failed.has(brandOf(w))).map(w => w.id));
   const seen = new Set(), matches = [];
   (prev.matches||[]).filter(m => failedIds.has(m.id)).forEach(m => { seen.add(m.key); matches.push(m); });
   warranties.forEach(w => {
     if(failed.has(brandOf(w))) return;
-    const list = (byBrand[brandOf(w)]||[]).filter(rec => recallRelevant(rec, w))
+    const asKnown = keys ? Object.assign({}, w, {manufacturer: recallBrand(w.manufacturer, keys)}) : w;
+    const list = (byBrand[brandOf(w)]||[]).filter(rec => recallRelevant(rec, asKnown))
       .sort((a,b) => String(b.RecallDate||'').localeCompare(String(a.RecallDate||''))).slice(0,3);
     list.forEach(rec => { const key=w.id+'|'+(rec.kind==='warning' ? rec.RecallID : (rec.URL||rec.RecallID||rec.Title)); if(seen.has(key)) return; seen.add(key);
       const m={id:w.id, name:w.name, key, title:rec.Title||'Recall', url:rec.URL||'', date:(rec.RecallDate||'').slice(0,10), hazard:((rec.Hazards||[])[0]||{}).Name||''};
@@ -1002,7 +1039,11 @@ export {
   defaultCurrency,
   manualSearchUrl,
   isPdfBytes,
+  BRANDS,
   brandNamed,
+  MAKER_ALIASES,
+  MAKER_GROUPS,
+  makerKey,
   RECALL_KEYWORDS,
   hasWord,
   hasWordOrPlural,
@@ -1016,6 +1057,7 @@ export {
   CPSC_WARNINGS_PAGE,
   warningsForBrand,
   recallStateFor,
+  recallBrand,
   recallCheckState,
   activeRecallMatches,
   icsEsc,

@@ -25,13 +25,14 @@ export const recallTools = [
       const { b } = read();
       const region = b.binder.country;
       if (!b.binder.recalls.on && !a.agreed) return { text: 'The recall check is off. ' + WHAT_IS_SENT(region) + ' Ask the person whether to switch it on; if they agree, call this again with agreed true.', data: { on: false, what_is_sent: WHAT_IS_SENT(region) } };
-      const brands = [...new Set(b.warranties.map(w => (w.manufacturer || '').trim()).filter(Boolean))];
+      // Each maker by the name recall notices use, as the app does: a hub's "Samsung Electronics Co., Ltd." is Samsung.
+      const brands = [...new Set(b.warranties.map(w => app.recallBrand(w.manufacturer, app.BRANDS)).filter(Boolean))];
       if (!brands.length) return change(bb => { bb.binder.recalls.on = true; return { text: 'The recall check is on. No item in the binder has a brand yet, so there was nothing to check.', data: { on: true, checked: 0, matches: [] } }; });
       let got;
       try { got = await fetchRecalls(region, brands); } catch (e) { got = { byBrand: {}, asked: [] }; }
       return change(bb => {
         bb.binder.recalls.on = true;
-        const res = app.recallCheckState(bb.warranties, got.byBrand, app.recallStateFor(bb.binder.recalls.state, region), today(), region);
+        const res = app.recallCheckState(bb.warranties, got.byBrand, app.recallStateFor(bb.binder.recalls.state, region), today(), region, app.BRANDS);
         bb.binder.recalls.state = res.state;
         const live = app.activeRecallMatches(res.state, bb.warranties), src = app.recallSource(region);
         return { text: (res.failedBrands ? 'The recall list could not be reached for ' + plural(res.failedBrands, 'brand') + ', so this check is incomplete. Try again later.\n' : 'Checked ' + plural(brands.length, 'brand') + ' against ' + src.list + ' on ' + today() + '.\n')
