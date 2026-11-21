@@ -39,7 +39,16 @@ const takenText = (serial, w) => 'Another item already has the serial number ' +
 /* Text that came from a hub, a label or another program: a stranger's words (BACKLOG "Security review"). Control
    characters, the invisible characters that can turn text round or hide it, and line breaks go; spaces are closed
    up; it is cut to length. It stays text: every screen that shows it escapes it, and it is never an instruction. */
-export const outsideText = (v, max) => (typeof v === 'string' ? v.replace(/[\u0000-\u001f\u007f-\u009f­؜᠎​-‏‪-‮⁠-⁤⁦-⁯﻿￹-￻]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, max) : '');
+// Some devices send their own names with web codes in them: a Samsung TV calls itself "55&quot; The Frame" (seen
+// 2026-11-21). The usual codes become their characters first; the result is still only text, escaped wherever shown.
+const ENTITY = { quot: '"', amp: '&', apos: "'", lt: '<', gt: '>', nbsp: ' ' };
+const unEntity = s => s.replace(/&(#x[0-9a-f]{1,6}|#\d{1,7}|quot|amp|apos|lt|gt|nbsp);/gi, (m, c) => {
+  const l = c.toLowerCase();
+  if (l[0] !== '#') return ENTITY[l];
+  const n = l[1] === 'x' ? parseInt(l.slice(2), 16) : parseInt(l.slice(1), 10);
+  return n > 0 && n < 0x110000 ? String.fromCodePoint(n) : ' ';
+});
+export const outsideText = (v, max) => (typeof v === 'string' ? unEntity(v).replace(/[\u0000-\u001f\u007f-\u009f\u00ad\u061c\u180e\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u206f\ufeff\ufff9-\ufffb]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, max) : '');
 const MADE = { type: 'string', pattern: '^\\d{4}-\\d{2}(-\\d{2})?$', description: 'When it was made, as the hub or label gives it: yyyy-mm or yyyy-mm-dd. Kept as that only; it is never the purchase date.' };
 
 /* Take the maker's answer for this item, if one was passed, and keep it with the binder. */
