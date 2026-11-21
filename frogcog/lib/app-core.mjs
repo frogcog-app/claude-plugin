@@ -92,7 +92,7 @@ function partsSearch(item, region, part){
 function buyTarget(m, presets, item, region){
   const p=(presets||[]).find(x=>x.key===(m&&m.type));
   const label=consumableLabel(m, presets);
-  if(p && p.byModel){ const s=partsSearch(item, region, label); if(s) return Object.assign({kind:'parts', label}, s); }
+  if(p && p.byModel && p.partsShop!==false){ const s=partsSearch(item, region, label); if(s) return Object.assign({kind:'parts', label}, s); }
   const query=consumableQuery(m, presets, item);
   return query ? {kind:'amazon', label, query} : null;
 }
@@ -109,7 +109,7 @@ function repairGuideQuery(item, problem){
   return [brand, kind||rest, String(problem||'').trim()].filter(Boolean).join(' ').replace(/\s+/g,' ').slice(0,120).trim();
 }
 function ifixitSearchUrl(query){ return query ? 'https://www.ifixit.com/Search?query='+encodeURIComponent(query) : ''; }
-function consumableLabel(m, presets){ const q=consumableQuery(m, presets).toLowerCase(); return /filter/.test(q)?'filter':/descal/.test(q)?'descaler':/cleaner/.test(q)?'cleaner':(/batter|aa|9v|cr\d/.test(q)?'battery':'replacement'); }
+function consumableLabel(m, presets){ const q=consumableQuery(m, presets).toLowerCase(); return /filter/.test(q)?'filter':/brush/.test(q)?'brush':/descal/.test(q)?'descaler':/cleaner/.test(q)?'cleaner':(/batter|aa|9v|cr\d/.test(q)?'battery':'replacement'); }
 function addressLabels(region){
   return region === 'GB' ? {region:'County', zip:'Postcode'} : {region:'State', zip:'ZIP code'};
 }
