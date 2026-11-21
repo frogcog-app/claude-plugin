@@ -9,7 +9,7 @@
  */
 import { check } from './schema.mjs';
 
-export const SERVER = { name: 'FrogCog binder', version: '0.1.14' };
+export const SERVER = { name: 'FrogCog binder', version: '0.1.15' };
 
 export function describe(tool){
   return {

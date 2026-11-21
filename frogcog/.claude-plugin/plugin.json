@@ -1,12 +1,12 @@
 {
   "name": "frogcog",
   "displayName": "FrogCog",
-  "version": "0.1.14",
+  "version": "0.1.15",
   "icon": "./icon.png",
   "description": "Keep a record of every appliance and device in your home, in a folder on your own computer: warranties, registration, upkeep, receipts, manuals, protection plans, possible recalls and a contents list. FrogCog works out the dates. A small program on your computer keeps the records there. Claude asks FrogCog's service about products (a brand, a kind of device, a country), never about you. Only the recall check, if you switch it on, sends anything: brand names, to the official recall list.",
   "author": { "name": "FrogCog", "url": "https://frogcog.com" },
   "homepage": "https://frogcog.com/ai/",
   "privacyPolicyUrl": "https://frogcog.com/privacy/",
   "network": { "hosts": ["mcp.frogcog.com", "www.saferproducts.gov", "www.gov.uk", "frogcog.app"] },
-  "keywords": ["home", "appliances", "warranty", "receipts", "maintenance", "household"]
+  "keywords": ["home", "appliances", "warranty", "receipts", "maintenance", "household", "smart home", "home assistant"]
 }

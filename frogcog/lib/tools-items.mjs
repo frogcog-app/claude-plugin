@@ -50,6 +50,25 @@ const unEntity = s => s.replace(/&(#x[0-9a-f]{1,6}|#\d{1,7}|quot|amp|apos|lt|gt|
 });
 export const outsideText = (v, max) => (typeof v === 'string' ? unEntity(v).replace(/[\u0000-\u001f\u007f-\u009f\u00ad\u061c\u180e\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u206f\ufeff\ufff9-\ufffb]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, max) : '');
 const MADE = { type: 'string', pattern: '^\\d{4}-\\d{2}(-\\d{2})?$', description: 'When it was made, as the hub or label gives it: yyyy-mm or yyyy-mm-dd. Kept as that only; it is never the purchase date.' };
+const HUB_ID = text(64, 'The hub\'s own id for the device (Home Assistant\'s device id), as the hub gives it. It lets a later look at the hub find the same device again.');
+
+/* Which binder item is which hub device (2026-11-21, BACKLOG "Smart home hubs"). Worked out here, never by the AI:
+   the hub's own device id first, then the serial number, then maker, model and name together. Maker and model alone
+   is only "maybe": two of the same smoke alarm are two items. Nothing a hub says is ever enough to remove an item. */
+const squash = s => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+const sameFrom = (w, from) => !!from && squash(w.from) === squash(from);
+const sameKind = (w, d) => !!squash(d.model) && squash(w.model) === squash(d.model) && (!d.brand || !w.manufacturer || sameMaker(d.brand, w.manufacturer));
+export function hubMatch(list, d, from, taken){
+  const free = list.filter(w => !w.contents && !(taken && taken.has(w.id)));
+  if (d.id) { const w = free.find(x => sameFrom(x, from) && x.hubId === d.id); if (w) return { w, by: 'the hub\'s device id' }; }
+  if (serialKey(d.serial)) { const w = free.find(x => serialKey(x.serial) === serialKey(d.serial)); if (w) return { w, by: 'the serial number' }; }
+  const kind = free.filter(w => sameKind(w, d));
+  const named = kind.filter(w => squash(w.name) === squash(d.name) && !(serialKey(w.serial) && serialKey(d.serial)));
+  if (named.length === 1) return { w: named[0], by: 'the maker, model and name' };
+  const maybe = kind.filter(w => !(serialKey(w.serial) && serialKey(d.serial)));
+  return maybe.length ? { maybe } : null;
+}
+const hubDevice = e => ({ id: outsideText(e.id, 64), name: outsideText(e.name, 120), brand: outsideText(e.brand, 80), model: outsideText(e.model, 80), serial: outsideText(e.serial, 80), room: outsideText(e.room, 60) });
 
 /* Take the maker's answer for this item, if one was passed, and keep it with the binder. */
 function takeTerm(b, w, lookup){
@@ -78,7 +97,7 @@ export function itemView(b, w){
     price: w.price == null ? null : money(w.price, cur), notes: w.notes || '',
     plan: w.plan && w.plan.state === 'purchased' ? { provider: w.plan.provider, ends: w.plan.ends || null } : null,
     files: (w.docs || []).length, manual: w.manual ? w.manual.name : null, contents_item: !!w.contents,
-    made_on: w.madeOn || null, from: w.from || null,
+    made_on: w.madeOn || null, from: w.from || null, hub_id: w.hubId || null,
   };
 }
 export function itemText(b, w){
@@ -103,14 +122,15 @@ export function itemText(b, w){
 
 function applyFields(b, w, a, isNew){
   const set = (k, v) => { if (v !== undefined) w[k] = v; };
-  if (a.name !== undefined) { const n = clip(a.name, 120); if (!n) throw told('An item needs a name. Nothing was saved.'); w.name = n; }
-  set('manufacturer', a.brand === undefined ? undefined : clip(a.brand, 80));
-  set('category', a.category === undefined ? undefined : (clip(a.category, 60) || 'Appliances'));
-  set('model', a.model === undefined ? undefined : clip(a.model, 80));
-  set('serial', a.serial === undefined ? undefined : clip(a.serial, 80));
+  // One-line fields are cleaned as outside text: they may have been copied from a hub, a label or a photo reading.
+  if (a.name !== undefined) { const n = outsideText(a.name, 120); if (!n) throw told('An item needs a name. Nothing was saved.'); w.name = n; }
+  set('manufacturer', a.brand === undefined ? undefined : outsideText(a.brand, 80));
+  set('category', a.category === undefined ? undefined : (outsideText(a.category, 60) || 'Appliances'));
+  set('model', a.model === undefined ? undefined : outsideText(a.model, 80));
+  set('serial', a.serial === undefined ? undefined : outsideText(a.serial, 80));
   if (a.serial !== undefined) { const other = serialTaken(b.warranties, w.serial, w); if (other) throw told(takenText(w.serial, other)); }
-  set('store', a.store === undefined ? undefined : clip(a.store, 80));
-  set('location', a.room === undefined ? undefined : clip(a.room, 60));
+  set('store', a.store === undefined ? undefined : outsideText(a.store, 80));
+  set('location', a.room === undefined ? undefined : outsideText(a.room, 60));
   set('notes', a.notes === undefined ? undefined : clip(a.notes, 2000));
   const before = { purchased: w.purchased || '', expiry: w.expiry || '' }, oldTerm = isNew ? null : termFor(b, w);
   if (a.purchased !== undefined) w.purchased = dayOr(a.purchased, 'purchase date');
@@ -171,14 +191,14 @@ export const itemTools = [
   },
   {
     name: 'add_items', title: 'Add several appliances at once',
-    description: 'Saves a list of appliances and devices in one go, for example the ones a smart home hub lists. Show the person the list first and pass only what they agreed to add. Give each one\'s name, and its brand, model, serial number and room as the list gave them; set from to where the list came from (for example "Home Assistant"). A hub does not know when anything was bought: leave the purchase date out, and the warranty end stays unknown until the person gives a date (change_item). made_on is when it was made, kept as that and never used as the purchase date. One warranty_terms proof serves every item of that brand and country. An item whose serial number is already in the binder, or comes twice in the list, is not saved. Answers with exactly what was saved and what was not, and why.',
+    description: 'Saves a list of appliances and devices in one go, for example the ones a smart home hub lists. Show the person the list first and pass only what they agreed to add. Give each one\'s name, and its brand, model, serial number and room as the list gave them; set from to where the list came from (for example "Home Assistant"). A hub does not know when anything was bought: leave the purchase date out, and the warranty end stays unknown until the person gives a date (change_item). made_on is when it was made, kept as that and never used as the purchase date. One warranty_terms proof serves every item of that brand and country. Pass the hub\'s own device id as hub_id, so a later look at the hub finds the same device (compare_hub). An item already in the binder (the same hub device id or serial number, or the same maker, model and name), or twice in the list, is not saved. Answers with exactly what was saved and what was not, and why.',
     input: obj({
       from: text(40, 'Where the list came from, in a few words, for example "Home Assistant".'),
       items: { type: 'array', maxItems: 50, description: 'Up to 50 items.', items: obj({
         name: text(400, 'What the person calls it; the hub\'s name for it if they did not say.'),
         brand: text(400, 'The maker, as the list gives it. A company name such as "Samsung Electronics Co., Ltd." is fine.'),
         model: text(400), serial: text(400), room: text(400), category: text(60, 'For example "Appliances". Default: Appliances.'),
-        made_on: MADE, notes: text(2000), lookup: LOOKUP,
+        made_on: MADE, notes: text(2000), lookup: LOOKUP, hub_id: HUB_ID,
       }, ['name']) },
     }, ['items']),
     async run(a){
@@ -190,6 +210,11 @@ export const itemTools = [
           if (!name) { notSaved.push({ name: '(no name)', why: 'it has no name' }); continue; }
           let made = '';
           if (e.made_on) { made = e.made_on.length === 7 ? (/^\d{4}-(0[1-9]|1[0-2])$/.test(e.made_on) ? e.made_on : '') : (realDay(e.made_on) || ''); if (!made) { notSaved.push({ name, why: 'the date it was made, "' + e.made_on + '", is not a real month or day' }); continue; } }
+          // Already in the binder? Known again by the hub's id, the serial number, or (for a device with no serial
+          // number, such as a TV, seen 2026-11-21) the same maker, model and name.
+          const d = hubDevice({ ...e, id: e.hub_id, name });
+          const hit = hubMatch(b.warranties, d, from);
+          if (hit && hit.w) { notSaved.push({ name, why: 'it is already in the binder as "' + hit.w.name + '" (id ' + hit.w.id + '), found by ' + hit.by + '. If it is another one, give it a name of its own' }); continue; }
           const w = { id: app.uid(), type: 'warranty', name: '', category: 'Appliances', location: '', manufacturer: '', store: '', model: '', serial: '', purchased: '', expiry: '', price: null, notes: '', source: 'list', registered: false, createdAt: Date.now() };
           try {
             applyFields(b, w, { name, brand: outsideText(e.brand, 80), model: outsideText(e.model, 80), serial: outsideText(e.serial, 80), room: outsideText(e.room, 60), category: e.category === undefined ? undefined : outsideText(e.category, 60), notes: e.notes === undefined ? undefined : outsideText(e.notes, 2000), lookup: e.lookup }, true);
@@ -197,6 +222,7 @@ export const itemTools = [
           if (w.price === null) delete w.price;
           if (made) w.madeOn = made;
           if (from) w.from = from;
+          if (from && d.id) w.hubId = d.id;
           b.warranties.push(w);
           saved.push(w);
         }
@@ -207,13 +233,63 @@ export const itemTools = [
     },
   },
   {
+    name: 'compare_hub', title: 'Match a hub\'s devices with the binder', readOnly: true,
+    description: 'Takes the devices a smart home hub lists (each with the hub\'s device id, name, brand, model, serial number and room, as the hub gave them) and says which binder item each one is: already in the binder (with the item\'s id, and anything the hub has that the item does not, such as a serial number or a new room), maybe the same (the same maker and model, so ask the person), or new. With whole_list true (every device the hub listed was passed), it also lists the items that came from this hub before and are not in the list now: the hub may have lost or renamed them, or the person may have sold them. Ask the person; never remove an item because a hub no longer lists it. Saves nothing.',
+    input: obj({
+      from: text(40, 'The hub\'s name, as given when the items were added, for example "Home Assistant".'),
+      whole_list: { type: 'boolean', description: 'True only when devices is everything the hub listed. Then the items from this hub that are missing from it are listed too. Leave out when passing one or a few devices.' },
+      devices: { type: 'array', maxItems: 300, description: 'Up to 300 devices.', items: obj({ id: HUB_ID, name: text(400), brand: text(400), model: text(400), serial: text(400), room: text(400) }) },
+    }, ['from', 'devices']),
+    async run(a){
+      const { b } = read();
+      const from = outsideText(a.from, 40), taken = new Set(), known = [], maybe = [], fresh = [];
+      for (const e of a.devices) {
+        const d = hubDevice(e);
+        if (!d.name && !d.brand && !d.model) continue;
+        const hit = hubMatch(b.warranties, d, from, taken);
+        if (hit && hit.w) {
+          taken.add(hit.w.id);
+          const w = hit.w, differs = {};
+          if (d.room && squash(d.room) !== squash(w.location)) differs.room = { binder: w.location || '', hub: d.room };
+          if (serialKey(d.serial) && !serialKey(w.serial)) differs.serial = { binder: w.serial || '', hub: d.serial };
+          if (d.model && !w.model) differs.model = { binder: '', hub: d.model };
+          if (d.brand && !w.manufacturer) differs.brand = { binder: '', hub: d.brand };
+          known.push({ device: d, item: w.id, item_name: w.name, found_by: hit.by, differs });
+        } else if (hit && hit.maybe) maybe.push({ device: d, items: hit.maybe.map(w => ({ id: w.id, name: w.name, room: w.location || '', serial: w.serial || '' })) });
+        else fresh.push({ device: d });
+      }
+      const asked = new Set(maybe.flatMap(m => m.items.map(w => w.id)));
+      const gone = a.whole_list !== true ? [] : b.warranties.filter(w => sameFrom(w, from) && !taken.has(w.id) && !asked.has(w.id)).map(w => ({ id: w.id, name: w.name, brand: w.manufacturer || '', model: w.model || '', room: w.location || '' }));
+      const dn = d => '"' + (d.name || d.model || d.brand) + '"' + (d.brand ? ' (' + [d.brand, d.model].filter(Boolean).join(' ') + ')' : '') + (d.room ? ', ' + d.room : '');
+      const diffWords = x => Object.entries(x).map(([k, v]) => (k === 'serial' ? 'serial number' : k) + ' ' + (v.binder ? '"' + v.binder + '" in the binder, ' : 'not in the binder, ') + '"' + v.hub + '" in the hub').join('; ');
+      const lines = [];
+      lines.push('Already in the binder (' + known.length + ')' + (known.length ? ':' : '.'));
+      for (const k of known) lines.push('- ' + dn(k.device) + ' is "' + k.item_name + '" (id ' + k.item + '), found by ' + k.found_by + '.' + (Object.keys(k.differs).length ? ' Different: ' + diffWords(k.differs) + '.' : ''));
+      lines.push('Maybe the same, so ask the person (' + maybe.length + ')' + (maybe.length ? ':' : '.'));
+      for (const m of maybe) lines.push('- ' + dn(m.device) + ' has the same maker and model as ' + m.items.map(w => '"' + w.name + '" (id ' + w.id + (w.room ? ', ' + w.room : '') + ')').join(' or ') + '.');
+      lines.push('New (' + fresh.length + ')' + (fresh.length ? ':' : '.'));
+      for (const f of fresh) lines.push('- ' + dn(f.device) + '.');
+      if (a.whole_list === true) lines.push('Added from ' + (from || 'this hub') + ' before and not in this list (' + gone.length + ')' + (gone.length ? ': ask the person what happened to each; never remove one because the hub no longer lists it.' : '.'));
+      for (const g of gone) lines.push('- "' + g.name + '" (id ' + g.id + ')' + (g.room ? ', ' + g.room : '') + '.');
+      return { text: lines.join('\n'), data: { already_in_binder: known, maybe_the_same: maybe, new: fresh, not_in_hub_now: a.whole_list === true ? gone : null } };
+    },
+  },
+  {
     name: 'change_item', title: 'Change an item',
-    description: 'Changes fields of one item. Pass only what changes. When the purchase date changes, the maker\'s warranty end date is worked out again here. Answers with the item as it now stands.',
-    input: obj({ item: text(120, 'The item\'s id, or its exact name.'), ...FIELDS }, ['item']),
+    description: 'Changes fields of one item. Pass only what changes. When the purchase date changes, the maker\'s warranty end date is worked out again here. When the person says a hub\'s device is this item (compare_hub said "maybe"), pass from and hub_id to tie them together. Answers with the item as it now stands.',
+    input: obj({ item: text(120, 'The item\'s id, or its exact name.'), ...FIELDS, from: text(40, 'Where the item came from, for example "Home Assistant".'), hub_id: HUB_ID }, ['item']),
     async run(a){
       return change(b => {
         const w = one(b.warranties, a.item, 'item');
         applyFields(b, w, a, false);
+        if (a.from !== undefined) { const f = outsideText(a.from, 40); if (f) w.from = f; else delete w.from; }
+        if (a.hub_id !== undefined) {
+          const id = outsideText(a.hub_id, 64);
+          const other = id && b.warranties.find(x => x !== w && x.hubId === id && squash(x.from) === squash(w.from));
+          if (other) throw told('"' + other.name + '" (id ' + other.id + ') is already that hub device. Nothing was saved.');
+          if (id && !w.from) throw told('Say which hub it is (from) as well. Nothing was saved.');
+          if (id) w.hubId = id; else delete w.hubId;
+        }
         return { text: 'Changed.\n' + itemText(b, w), data: { saved: itemView(b, w) } };
       });
     },
