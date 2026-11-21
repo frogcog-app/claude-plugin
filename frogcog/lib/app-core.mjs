@@ -254,6 +254,13 @@ function isPdfBytes(buf){
   for(let i=0; i<n; i++){ if(u[i]===0x25 && u[i+1]===0x50 && u[i+2]===0x44 && u[i+3]===0x46 && u[i+4]===0x2D) return true; }
   return false;
 }
+function brandNamed(text, brand){
+  const plain=t=>String(t||'').normalize('NFD').replace(/[̀-ͯ]/g,'');
+  const b=plain(brand).trim();
+  if(!b) return false;
+  const pat=b.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+  return new RegExp('(?:^|[^A-Za-z])'+pat+'(?![A-Za-z])', b.length<=3?'':'i').test(plain(text));
+}
 const RECALL_KEYWORDS={
   'Appliances':['appliance','washer','washing','dryer','dishwasher','refrigerator','fridge','freezer','oven','cooker','range','stove','microwave','hob','cooktop','hood'],
   'Consumer Electronics':['tv','television','monitor','speaker','soundbar','headphone','earbud','console','projector'],
@@ -995,6 +1002,7 @@ export {
   defaultCurrency,
   manualSearchUrl,
   isPdfBytes,
+  brandNamed,
   RECALL_KEYWORDS,
   hasWord,
   hasWordOrPlural,

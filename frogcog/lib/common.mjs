@@ -25,8 +25,11 @@ export function warrantyEnd(purchased, years){
   return app.iso(app.addMonths(app.parse(purchased), years * 12));
 }
 
+/* Is a maker's answer for this item's maker? The same name, or one names the other as a word of its own, by the
+   app's rule (brandNamed: LG and GE only in capitals). "Samsung Electronics Co., Ltd" (how a hub may give it) is
+   Samsung, and is not GE: plain "contains" let GE's answer through for it until 2026-11-21. */
 const squash = s => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
-export const sameMaker = (a, b) => { const x = squash(a), y = squash(b); return !!x && !!y && (x.includes(y) || y.includes(x)); };
+export const sameMaker = (a, b) => { const x = squash(a), y = squash(b); return !!x && !!y && (x === y || app.brandNamed(b, a) || app.brandNamed(a, b)); };
 
 /* The maker's answer kept for an item's brand (and category, where the maker gives one its own length). */
 const termKey = (brand, category) => String(brand || '').trim().toLowerCase() + '|' + (category || '');
