@@ -18,7 +18,8 @@ What the person said: $ARGUMENTS
 
 - `list_upkeep`: every job with its next due date, the days from today, and a link to buy the right part where one applies. The dates and days are worked out by the binder. Never work out a next due date yourself.
 - `upkeep_done`: marks a job done today, or on the day the person gives, and moves the next due date on.
-- `change_upkeep`: changes a job's title, interval or next due date as the person gives them, or removes it after they confirm.
+- `change_upkeep`: changes a job's title, interval or next due date as the person gives them, or removes it after they confirm. A removed job can be brought back with `restore_item`.
+- `upkeep_due_now`: when a reading says a job is needed before its date (a smart home hub's "filter life 5%", a battery warning, or the person noticed it), ask the person whether to move the job to due now. Only on their yes, call it with what the reading said and `person_agreed` true. A reading never moves a job on its own. When the job is done, `upkeep_done` counts the next one from that day.
 - The buy link is a plain search at a shop. FrogCog is not paid for it today.
 
 ## Rules

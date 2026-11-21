@@ -6,8 +6,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { obj, text, pick, DAY } from './schema.mjs';
-import { change, read, told } from './folder.mjs';
-import { app, today, dayOr, warrantyEnd, sameMaker, termFor, keepTerm, regRule, homeState, one, money, clip, plural, statusWord } from './common.mjs';
+import { change, read, told, Told } from './folder.mjs';
+import { app, today, dayOr, realDay, warrantyEnd, sameMaker, termFor, keepTerm, regRule, homeState, one, money, clip, plural, statusWord } from './common.mjs';
 import { makerTerm } from './proof.mjs';
 
 const LOOKUP = { description: 'The "proof" from FrogCog lookups\' warranty_terms answer for this brand and country: the long text that starts fc1., passed on exactly as it came, every character. It holds the maker\'s figures, signed, and is all the binder needs; the whole answer is taken too. A missing or changed proof is refused. Leave out when the brand is not on lookups\' list.' };
@@ -28,6 +28,19 @@ const FIELDS = {
 };
 
 const SIGNED_LINE = 'The maker\'s figures are signed by FrogCog lookups, and the signature was checked on this computer.';
+
+/* A serial number belongs to one machine, so a second item with the same one is a mistake: a list added twice, or an
+   import run again (the Home Assistant test, 2026-11-21, saved one twice without a word). Case, spaces and dashes
+   are ignored. Short ones and the usual "none" words are not serial numbers and are never compared. */
+const serialKey = s => { const k = String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, ''); return k.length >= 4 && !/^(NONE|UNKNOWN|NOTKNOWN|NOSERIAL|TBC|TBD)$/.test(k) ? k : ''; };
+export function serialTaken(list, serial, except){ const k = serialKey(serial); return k ? (list.find(x => x !== except && serialKey(x.serial) === k) || null) : null; }
+const takenText = (serial, w) => 'Another item already has the serial number ' + serial + ': "' + w.name + '" (id ' + w.id + '). A serial number belongs to one machine, so nothing was saved. If it is the same item, change that one instead.';
+
+/* Text that came from a hub, a label or another program: a stranger's words (BACKLOG "Security review"). Control
+   characters, the invisible characters that can turn text round or hide it, and line breaks go; spaces are closed
+   up; it is cut to length. It stays text: every screen that shows it escapes it, and it is never an instruction. */
+export const outsideText = (v, max) => (typeof v === 'string' ? v.replace(/[\u0000-\u001f\u007f-\u009f­؜᠎​-‏‪-‮⁠-⁤⁦-⁯﻿￹-￻]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, max) : '');
+const MADE = { type: 'string', pattern: '^\\d{4}-\\d{2}(-\\d{2})?$', description: 'When it was made, as the hub or label gives it: yyyy-mm or yyyy-mm-dd. Kept as that only; it is never the purchase date.' };
 
 /* Take the maker's answer for this item, if one was passed, and keep it with the binder. */
 function takeTerm(b, w, lookup){
@@ -56,6 +69,7 @@ export function itemView(b, w){
     price: w.price == null ? null : money(w.price, cur), notes: w.notes || '',
     plan: w.plan && w.plan.state === 'purchased' ? { provider: w.plan.provider, ends: w.plan.ends || null } : null,
     files: (w.docs || []).length, manual: w.manual ? w.manual.name : null, contents_item: !!w.contents,
+    made_on: w.madeOn || null, from: w.from || null,
   };
 }
 export function itemText(b, w){
@@ -65,6 +79,7 @@ export function itemText(b, w){
   const given = [v.serial && 'Serial number: ' + v.serial, v.price && 'Price: ' + v.price, w.qty > 1 && 'Quantity: ' + w.qty,
     w.replaceEst != null && 'Your estimate to buy it again: ' + money(w.replaceEst, w.currency || app.defaultCurrency(b.binder.country)), v.installed && 'Installed: ' + v.installed].filter(Boolean);
   if (given.length) lines.push(given.join('. ') + '.');
+  if (v.made_on || v.from) lines.push([v.made_on && 'Made: ' + v.made_on + ' (not the purchase date)', v.from && 'Came from: ' + v.from].filter(Boolean).join('. ') + '.');
   if (v.warranty_ends) lines.push('Warranty ends: ' + v.warranty_ends + ' (' + v.end_date_from + '). ' + v.status + (v.days_left === null ? '' : ', ' + app.daysWord(v.days_left)) + '.');
   else if (w.noWarranty) lines.push('No warranty.');
   else if (!w.contents) {
@@ -84,6 +99,7 @@ function applyFields(b, w, a, isNew){
   set('category', a.category === undefined ? undefined : (clip(a.category, 60) || 'Appliances'));
   set('model', a.model === undefined ? undefined : clip(a.model, 80));
   set('serial', a.serial === undefined ? undefined : clip(a.serial, 80));
+  if (a.serial !== undefined) { const other = serialTaken(b.warranties, w.serial, w); if (other) throw told(takenText(w.serial, other)); }
   set('store', a.store === undefined ? undefined : clip(a.store, 80));
   set('location', a.room === undefined ? undefined : clip(a.room, 60));
   set('notes', a.notes === undefined ? undefined : clip(a.notes, 2000));
@@ -141,6 +157,43 @@ export const itemTools = [
         if (w.price === null) delete w.price;
         b.warranties.push(w);
         return { text: 'Saved.\n' + itemText(b, w), data: { saved: itemView(b, w), items: b.warranties.length } };
+      });
+    },
+  },
+  {
+    name: 'add_items', title: 'Add several appliances at once',
+    description: 'Saves a list of appliances and devices in one go, for example the ones a smart home hub lists. Show the person the list first and pass only what they agreed to add. Give each one\'s name, and its brand, model, serial number and room as the list gave them; set from to where the list came from (for example "Home Assistant"). A hub does not know when anything was bought: leave the purchase date out, and the warranty end stays unknown until the person gives a date (change_item). made_on is when it was made, kept as that and never used as the purchase date. One warranty_terms proof serves every item of that brand and country. An item whose serial number is already in the binder, or comes twice in the list, is not saved. Answers with exactly what was saved and what was not, and why.',
+    input: obj({
+      from: text(40, 'Where the list came from, in a few words, for example "Home Assistant".'),
+      items: { type: 'array', maxItems: 50, description: 'Up to 50 items.', items: obj({
+        name: text(400, 'What the person calls it; the hub\'s name for it if they did not say.'),
+        brand: text(400, 'The maker, as the list gives it. A company name such as "Samsung Electronics Co., Ltd." is fine.'),
+        model: text(400), serial: text(400), room: text(400), category: text(60, 'For example "Appliances". Default: Appliances.'),
+        made_on: MADE, notes: text(2000), lookup: LOOKUP,
+      }, ['name']) },
+    }, ['items']),
+    async run(a){
+      if (!a.items.length) throw told('The list is empty. Nothing was saved.');
+      return change(b => {
+        const from = outsideText(a.from, 40), saved = [], notSaved = [];
+        for (const e of a.items) {
+          const name = outsideText(e.name, 120);
+          if (!name) { notSaved.push({ name: '(no name)', why: 'it has no name' }); continue; }
+          let made = '';
+          if (e.made_on) { made = e.made_on.length === 7 ? (/^\d{4}-(0[1-9]|1[0-2])$/.test(e.made_on) ? e.made_on : '') : (realDay(e.made_on) || ''); if (!made) { notSaved.push({ name, why: 'the date it was made, "' + e.made_on + '", is not a real month or day' }); continue; } }
+          const w = { id: app.uid(), type: 'warranty', name: '', category: 'Appliances', location: '', manufacturer: '', store: '', model: '', serial: '', purchased: '', expiry: '', price: null, notes: '', source: 'list', registered: false, createdAt: Date.now() };
+          try {
+            applyFields(b, w, { name, brand: outsideText(e.brand, 80), model: outsideText(e.model, 80), serial: outsideText(e.serial, 80), room: outsideText(e.room, 60), category: e.category === undefined ? undefined : outsideText(e.category, 60), notes: e.notes === undefined ? undefined : outsideText(e.notes, 2000), lookup: e.lookup }, true);
+          } catch (err) { if (!(err instanceof Told)) throw err; notSaved.push({ name, why: String(err.message).replace(/ Nothing was saved\.$/, '') }); continue; }
+          if (w.price === null) delete w.price;
+          if (made) w.madeOn = made;
+          if (from) w.from = from;
+          b.warranties.push(w);
+          saved.push(w);
+        }
+        const text = (saved.length ? 'Saved ' + plural(saved.length, 'item') + (from ? ' from ' + from : '') + ':\n' + saved.map(w => '- ' + itemText(b, w).split('\n').join('\n  ')).join('\n') : 'Nothing was saved.')
+          + (notSaved.length ? '\nNot saved (' + notSaved.length + '):\n' + notSaved.map(x => '- ' + x.name + ': ' + x.why).join('\n') : '');
+        return { text, data: { saved: saved.map(w => itemView(b, w)), not_saved: notSaved, items: b.warranties.length } };
       });
     },
   },
@@ -204,15 +257,21 @@ export const itemTools = [
     },
   },
   {
-    name: 'restore_item', title: 'Bring back a removed item',
-    description: 'Lists the removed items when called with nothing, or brings one back into the binder with its upkeep jobs.',
-    input: obj({ item: text(120, 'The removed item\'s id, or its exact name. Leave out to list them.') }),
+    name: 'restore_item', title: 'Bring back a removed item or upkeep job',
+    description: 'Lists what has been removed (items, and upkeep jobs removed on their own) when called with nothing, or brings one back: an item with its upkeep jobs, or a single upkeep job.',
+    input: obj({ item: text(120, 'The removed item\'s or upkeep job\'s id, or its exact name. Leave out to list them.') }),
     async run(a){
-      if (!a.item) { const { b } = read(); const l = b.binder.removed; return { text: l.length ? 'Removed items:\n' + l.map(r => '- ' + r.item.name + ', removed ' + r.at + '. Id ' + r.item.id).join('\n') : 'Nothing has been removed.', data: { removed: l.map(r => ({ id: r.item.id, name: r.item.name, at: r.at })) } }; }
+      // The removed list holds items (with their jobs) and, since change_upkeep can remove one, upkeep jobs on their
+      // own. Until 2026-11-21 a lone job on the list broke this tool for everything (it read the item's name).
+      const entries = b => b.binder.removed.map(x => x.item ? { id: x.item.id, name: x.item.name, kind: 'item', at: x.at, x }
+        : { id: ((x.upkeep || [])[0] || {}).id, name: ((x.upkeep || [])[0] || {}).title, kind: 'upkeep job', at: x.at, x }).filter(e => e.id);
+      if (!a.item) { const { b } = read(); const l = entries(b); return { text: l.length ? 'Removed:\n' + l.map(e => '- ' + e.name + ' (' + e.kind + '), removed ' + e.at + '. Id ' + e.id).join('\n') : 'Nothing has been removed.', data: { removed: l.map(e => ({ id: e.id, name: e.name, kind: e.kind, at: e.at })) } }; }
       return change(b => {
-        const r = one(b.binder.removed.map(x => ({ id: x.item.id, name: x.item.name, x })), a.item, 'removed item').x;
+        const e = one(entries(b), a.item, 'removed item or upkeep job'), r = e.x;
         b.binder.removed = b.binder.removed.filter(x => x !== r);
-        b.warranties.push(r.item); b.maintenance.push(...(r.upkeep || []));
+        b.maintenance.push(...(r.upkeep || []));
+        if (!r.item) return { text: 'Brought back the upkeep job "' + e.name + '", next due ' + (r.upkeep[0].nextDue || 'not set') + '.', data: { saved: r.upkeep[0] } };
+        b.warranties.push(r.item);
         return { text: 'Brought back.\n' + itemText(b, r.item), data: { saved: itemView(b, r.item) } };
       });
     },

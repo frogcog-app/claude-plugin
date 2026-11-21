@@ -9,7 +9,7 @@ import { obj, text, pick, DAY } from './schema.mjs';
 import { change, read, told } from './folder.mjs';
 import { app, today, dayOr, termFor, regRule, homeState, one, money, clip, plural, upkeepPreset, statusWord } from './common.mjs';
 import { upkeepJob, seasonList } from './proof.mjs';
-import { itemText } from './tools-items.mjs';
+import { itemText, outsideText } from './tools-items.mjs';
 
 const ITEM = text(120, 'The item\'s id, or its exact name.');
 const search = q => 'https://www.google.com/search?q=' + encodeURIComponent(q);
@@ -54,7 +54,7 @@ const dueWords = d => (d === null ? '' : d < 0 ? 'overdue by ' + plural(-d, 'day
 function jobLine(b, m){
   const d = app.daysFromToday(m.nextDue), buy = buyLink(b, m);
   return m.title + (m.product ? ' (' + m.product + ')' : '') + ': every ' + plural(m.interval, 'month') + ', next due ' + m.nextDue + (d === null ? '' : ', ' + dueWords(d))
-    + (m.lastDone ? ', last done ' + m.lastDone : '') + '. Id ' + m.id + (buy ? '\n  To buy the ' + buy.what + ': ' + buy.link + ' (' + buy.where + ')' : '');
+    + (m.lastDone ? ', last done ' + m.lastDone : '') + (m.dueBecause ? ', moved to due on ' + m.dueBecause.on + ' at the person\'s word (' + m.dueBecause.reading + ')' : '') + '. Id ' + m.id + (buy ? '\n  To buy the ' + buy.what + ': ' + buy.link + ' (' + buy.where + ')' : '');
 }
 
 /* ---------- protection plans ---------- */
@@ -176,7 +176,7 @@ export const careTools = [
       const id = a.item ? one(b.warranties, a.item, 'item').id : null;
       const jobs = b.maintenance.filter(m => !id || m.itemId === id).sort((x, y) => String(x.nextDue).localeCompare(String(y.nextDue)));
       return { text: 'Today is ' + today() + '.\n' + (jobs.length ? jobs.map(m => '- ' + jobLine(b, m)).join('\n') : 'No upkeep jobs yet.'),
-        data: { today: today(), jobs: jobs.map(m => ({ id: m.id, title: m.title, for: m.product || '', every_months: m.interval, next_due: m.nextDue, days: app.daysFromToday(m.nextDue), due: dueWords(app.daysFromToday(m.nextDue)), last_done: m.lastDone || null, buy: buyLink(b, m) })) } };
+        data: { today: today(), jobs: jobs.map(m => ({ id: m.id, title: m.title, for: m.product || '', every_months: m.interval, next_due: m.nextDue, days: app.daysFromToday(m.nextDue), due: dueWords(app.daysFromToday(m.nextDue)), last_done: m.lastDone || null, due_because: m.dueBecause || null, buy: buyLink(b, m) })) } };
     },
   },
   {
@@ -186,14 +186,32 @@ export const careTools = [
     async run(a){
       return change(b => {
         const m = one(b.maintenance, a.job, 'upkeep job', x => x.title), on = dayOr(a.done_on, 'done-on date') || today();
-        m.lastDone = on; m.nextDue = app.iso(app.addMonths(app.parse(on), m.interval));
+        m.lastDone = on; m.nextDue = app.iso(app.addMonths(app.parse(on), m.interval)); delete m.dueBecause;
         return { text: 'Done on ' + on + '.\n' + jobLine(b, m), data: { saved: m } };
       });
     },
   },
   {
+    name: 'upkeep_due_now', title: 'Move an upkeep job to due now, at the person\'s word',
+    description: 'Moves one upkeep job to due today because a reading says it is needed, for example a hub\'s "filter life 5%" or a battery warning, or the person noticed it. Only when the person has said to: FrogCog counts months, and a reading never moves a job by itself. Records what was said. When the job is done, upkeep_done counts the next one from that day.',
+    input: obj({
+      job: text(120, 'The job\'s id, or its exact title.'),
+      reading: text(200, 'What the reading or the person said, for example "Filter life 5%".'),
+      person_agreed: { type: 'boolean', description: 'True only when the person has said to move this job to due now.' },
+    }, ['job', 'reading', 'person_agreed']),
+    async run(a){
+      if (a.person_agreed !== true) throw told('Only the person can move a job to due now: ask them first. Nothing was changed.');
+      return change(b => {
+        const m = one(b.maintenance, a.job, 'upkeep job', x => x.title), reading = outsideText(a.reading, 200);
+        if (!reading) throw told('Say what the reading or the person said. Nothing was changed.');
+        m.nextDue = today(); m.dueBecause = { on: today(), reading };
+        return { text: 'Moved to due today.\n' + jobLine(b, m), data: { saved: m } };
+      });
+    },
+  },
+  {
     name: 'change_upkeep', title: 'Change or remove an upkeep job', destructive: true,
-    description: 'Changes one upkeep job\'s title, how often it comes round, its detail or its next due date, as the person gives them; or removes the job to the folder\'s "removed" list when remove is true (ask the person first).',
+    description: 'Removes or changes one upkeep job: its title, how often it comes round, its detail or its next due date, as the person gives them; or removes the job to the folder\'s "removed" list when remove is true (ask the person first).',
     input: obj({ job: text(120, 'The job\'s id, or its exact title.'), title: text(120), every_months: { type: 'integer', minimum: 1, maximum: 240 }, next_due: DAY, detail: text(200), remove: { type: 'boolean' } }, ['job']),
     async run(a){
       return change(b => {

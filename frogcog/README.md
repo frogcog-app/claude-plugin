@@ -30,6 +30,7 @@ example `/set-up` for `/frogcog:set-up`. Both work.
 |---|---|
 | `set-up` | Pick the folder and the country. Read who sees what. |
 | `add-item`, `add-from-photo` | Add an appliance or device, typed in or read from a photo of its label or receipt. |
+| `add-from-hub` | Add the appliances a smart home hub such as Home Assistant knows about, in one go. Connect the hub read-only. |
 | `find-item`, `change-item`, `remove-item` | Find, change and remove items. |
 | `whats-due`, `calendar` | See what is due. Get a calendar file of every date. |
 | `backup` | Move your binder to or from the FrogCog app. |
