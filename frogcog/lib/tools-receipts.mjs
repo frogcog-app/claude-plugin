@@ -111,7 +111,7 @@ export const receiptTools = [
       const stem = 'frogcog-' + String(pack.title).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 60) + '-' + today();
       const html = path.join(dir, 'exports', stem + '.html'), csv = path.join(dir, 'exports', stem + '.csv');
       fs.writeFileSync(html, app.packHtml(pack, images, APP_NAME, today()));
-      fs.writeFileSync(csv, '﻿' + app.toCsv(pack.columns, pack.rows));
+      fs.writeFileSync(csv, '\ufeff' + app.toCsv(pack.columns, pack.rows));
       const totals = Object.entries(pack.totals || {}).map(([c, n]) => money(n, c)).join(' + ');
       return { text: pack.title + ': ' + plural(pack.rows.length, 'line') + (totals ? ', total ' + totals : '') + '.\nTo print: ' + html + '\nSpreadsheet: ' + csv + '\n' + app.PACK_NOTE,
         data: { title: pack.title, lines: pack.rows.length, totals: pack.totals || {}, page: html, spreadsheet: csv, pictures: Object.keys(images).length } };

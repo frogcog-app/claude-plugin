@@ -37,7 +37,7 @@ export async function unlockBackup(wrapper, passphrase){
 function takePassphrase(dir){
   const p = path.join(dir, 'inbox', 'passphrase.txt');
   if (!fs.existsSync(p)) throw told('To use a passphrase without the AI company seeing it: save it as one line in a file called passphrase.txt in the inbox folder (' + path.join(dir, 'inbox') + '), then ask again. The binder reads it and deletes the file. Nothing was done.');
-  const pass = fs.readFileSync(p, 'utf8').replace(/^﻿/, '').split(/\r?\n/)[0].trim();
+  const pass = fs.readFileSync(p, 'utf8').replace(/^\ufeff/, '').split(/\r?\n/)[0].trim();
   fs.rmSync(p);
   if (!pass) throw told('passphrase.txt was empty. It has been deleted. Nothing was done.');
   return pass;
